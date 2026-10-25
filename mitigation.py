@@ -20,7 +20,7 @@ import numpy as np
 from . import params
 from .guard import (
     PhysicsGuard, Verdict, run_lookahead,
-    LOOKAHEAD_S, MAX_TEMP_LOOKAHEAD_C, ACTUATOR_GRACE_S
+    LOOKAHEAD_S, MAX_TEMP_LOOKAHEAD_C, ACTUATOR_GRACE_S, CALIB_WINDOW_S
 )
 
 
@@ -40,8 +40,10 @@ class SafetyGate:
 
         # Operating modes: NOMINAL, DEGRADED, LIMP_HOME, SHUTDOWN
         self.mode: str = "NOMINAL"
+        self.mode_dwell_s: float = 0.0
         self.clean_seconds: int = 0
         self.deescalate_delay_s: int = 30  # N clean seconds before de-escalation
+        self.min_dwell_s: float = 30.0     # Minimum dwell time before de-escalation
 
         # Actuator confirmation tracking
         self.pump_forced_t: Optional[float] = None
@@ -77,7 +79,15 @@ class SafetyGate:
             self.last_trusted_temp = float(measured.get("temp_cell_a", params.T_AMBIENT_NOMINAL_C))
             return sanitized
 
-        trusted_t = self.guard.trusted_temperature()
+        # Addition A: Initialise twin from measured temperature if first step
+        if getattr(self.guard, "_first_step", False):
+            self.guard.initialize_twin_from_measured(measured)
+
+        # During calibration window, use twin initialised at first reading to avoid startup glitch
+        if t <= CALIB_WINDOW_S and hasattr(self.guard, "_twin"):
+            trusted_t = float(self.guard._twin.T_batt)
+        else:
+            trusted_t = self.guard.trusted_temperature()
         self.last_trusted_temp = float(trusted_t)
         trust = self.guard.sensor_trust()
 
@@ -123,9 +133,10 @@ class SafetyGate:
             sanitized["temp_cell_b"] = float(trusted_t + 0.25)
             self.intervened = True
             self.last_action = "virtual_sensor_sub_both"
+            margin_c = getattr(params, "TWIN_TEMP_MARGIN_C", 3.0)
             self.last_reason = (
                 f"t={t:.0f}s: both temp sensors untrusted (A={ta_status}, B={tb_status}); "
-                f"substituted with twin model temperature + 1.6C margin ({trusted_t:.2f} C)"
+                f"substituted with twin model temperature + {margin_c:.1f}C margin ({trusted_t:.2f} C)"
             )
             self.last_signals_affected.extend(["temp_cell_a", "temp_cell_b"])
 
@@ -231,6 +242,8 @@ class SafetyGate:
         # ------------------------------------------------------------------
         # 3. Look-ahead thermal prediction and current bisection
         # ------------------------------------------------------------------
+        pred_T = 0.0
+        pred_at_0 = 0.0
         if self.guard is not None and hasattr(self.guard, "_twin"):
             twin = self.guard._twin
             t_amb = float(measured.get("ambient_temp", params.T_AMBIENT_NOMINAL_C))
@@ -244,6 +257,11 @@ class SafetyGate:
                 meas_flow = float(measured.get("pump_flow_lpm", appl_pump))
                 flow_for_lookahead = min(flow_for_lookahead, max(0.5, meas_flow))
 
+            trust = self.guard.sensor_trust()
+            start_T = trusted_t if (trust.get("temp_cell_a") == "ok" or trust.get("temp_cell_b") == "ok") else twin.T_batt
+
+            old_T = twin.T_batt
+            twin.T_batt = float(start_T)
             pred_T = run_lookahead(
                 twin_state=twin,
                 i_pack=appl_curr,
@@ -253,10 +271,10 @@ class SafetyGate:
                 steps=LOOKAHEAD_S
             )
 
-            # If look-ahead predicts pack temperature > 45 C, bisection search down until <= 44 C
+            # If look-ahead predicts pack temperature > 45 C, bisection search down until <= 45 C
             if pred_T > MAX_TEMP_LOOKAHEAD_C:
                 orig_c = appl_curr
-                target_T = 44.0  # target safe ceiling with 1 C margin
+                target_T = MAX_TEMP_LOOKAHEAD_C  # target safe ceiling
 
                 # Bisection search between 0.0 A and appl_curr
                 lo = 0.0
@@ -281,23 +299,37 @@ class SafetyGate:
                 action_names.append("lookahead_derate")
                 action_reasons.append(
                     f"look-ahead predicted {pred_T:.1f} C > 45.0 C; "
-                    f"reduced current {orig_c:.1f}A -> {appl_curr:.1f}A (predicts <= 44.0 C)"
+                    f"reduced current {orig_c:.1f}A -> {appl_curr:.1f}A (predicts <= {target_T:.1f} C)"
                 )
                 self.last_signals_affected.append("pack_current")
 
                 if self.mode not in ("SHUTDOWN", "LIMP_HOME"):
                     self.mode = "DEGRADED"
 
+            pred_at_0 = run_lookahead(
+                twin_state=twin,
+                i_pack=0.0,
+                pump_lpm=flow_for_lookahead,
+                T_amb=t_amb,
+                T_in=t_in,
+                steps=LOOKAHEAD_S
+            )
+            twin.T_batt = old_T
+
         # ------------------------------------------------------------------
-        # 4. Mode Escalation and Hysteresis De-escalation
+        # 4. Mode Escalation and Hysteresis De-escalation (Addition B)
         # ------------------------------------------------------------------
         last_verdict = getattr(self.guard, "_last_verdict", None)
+
+        # Increment dwell timer in current mode
+        self.mode_dwell_s += 1.0
+        old_mode = self.mode
 
         # Check for unmitigated physical emergencies requiring SHUTDOWN:
         # 1. Trusted temperature reaching emergency trip limit
         # 2. Lookahead predicting > 45 C even when current is at 0 A
         is_thermal_runaway = (trusted_t >= params.CELL_TEMP_TRIP_C - 1.0)
-        unmitigatable_heat = (appl_curr == 0.0 and locals().get("pred_T", 0.0) > MAX_TEMP_LOOKAHEAD_C)
+        unmitigatable_heat = (pred_at_0 > MAX_TEMP_LOOKAHEAD_C)
 
         if is_thermal_runaway or unmitigatable_heat:
             if self.mode != "SHUTDOWN":
@@ -305,15 +337,18 @@ class SafetyGate:
                 self.intervened = True
                 action_names.append("emergency_shutdown")
                 action_reasons.append(
-                    f"thermal hazard (trusted_t={trusted_t:.1f}C, pred_T={locals().get('pred_T', 0.0):.1f}C); "
+                    f"thermal hazard (trusted_t={trusted_t:.1f}C, pred_at_0={pred_at_0:.1f}C); "
                     f"forced SHUTDOWN (0A)"
                 )
                 self.clean_seconds = 0
+                self.mode_dwell_s = 0.0
 
         # Mode escalation based on active interventions and guard findings:
         elif self.pump_forced_t is not None and (t - self.pump_forced_t >= ACTUATOR_GRACE_S) and float(measured.get("pump_flow_lpm", 0.0)) < 3.0:
-            if self.mode != "SHUTDOWN":
+            if self.mode not in ("SHUTDOWN", "LIMP_HOME"):
                 self.mode = "LIMP_HOME"
+                self.clean_seconds = 0
+                self.mode_dwell_s = 0.0
 
         elif self.guard is not None and all(self.guard.sensor_trust().get(ch) != "ok" for ch in ["temp_cell_a", "temp_cell_b"]):
             # Both temperature sensors untrusted -> LIMP_HOME
@@ -321,29 +356,70 @@ class SafetyGate:
                 self.mode = "LIMP_HOME"
                 action_names.append("limp_home_redundancy_loss")
                 action_reasons.append("both temperature sensors untrusted; operating in LIMP_HOME")
+                self.clean_seconds = 0
+                self.mode_dwell_s = 0.0
 
-        elif self.intervened or (last_verdict is not None and last_verdict.diagnosis != "NORMAL"):
-            # Actuator fault, command clamp, pump force, or sensor substitution -> DEGRADED
+        elif self.intervened:
             if self.mode == "NOMINAL":
                 self.mode = "DEGRADED"
-            if last_verdict is not None and last_verdict.diagnosis == "ACTUATOR_FAULT":
-                action_names.append("operator_warning_actuator_fault")
-            self.clean_seconds = 0
-
-        else:
-            # Clean step: track hysteresis counter for de-escalation
-            if not self.intervened:
-                self.clean_seconds += 1
-                if self.clean_seconds >= self.deescalate_delay_s:
-                    if self.mode == "SHUTDOWN":
-                        self.mode = "LIMP_HOME"
-                    elif self.mode == "LIMP_HOME":
-                        self.mode = "DEGRADED"
-                    elif self.mode == "DEGRADED":
-                        self.mode = "NOMINAL"
-                    self.clean_seconds = 0
-            else:
                 self.clean_seconds = 0
+                self.mode_dwell_s = 0.0
+
+        # Hysteresis De-escalation with min dwell 30 s hold in DEGRADED/LIMP_HOME:
+        # De-escalation only checked if no escalation happened this step
+        if self.mode == old_mode and self.mode != "NOMINAL":
+            trust = self.guard.sensor_trust() if self.guard is not None else {"temp_cell_a": "ok", "temp_cell_b": "ok"}
+            ta_status = trust.get("temp_cell_a", "ok")
+            tb_status = trust.get("temp_cell_b", "ok")
+            meas_flow = float(measured.get("pump_flow_lpm", 0.0))
+
+            if self.mode == "SHUTDOWN":
+                safe_cond = (
+                    trusted_t < 45.0 and pred_at_0 <= 44.0 and
+                    meas_flow >= 3.0 and self.pump_forced_t is None
+                )
+                if safe_cond:
+                    self.clean_seconds += 1
+                    if self.clean_seconds >= self.deescalate_delay_s and self.mode_dwell_s >= self.min_dwell_s:
+                        self.mode = "LIMP_HOME"
+                        self.mode_dwell_s = 0.0
+                        self.clean_seconds = 0
+                else:
+                    self.clean_seconds = 0
+
+            elif self.mode == "LIMP_HOME":
+                safe_cond = (
+                    (ta_status == "ok" or tb_status == "ok") and
+                    meas_flow >= 3.0 and self.pump_forced_t is None and
+                    trusted_t < 45.0 and pred_T <= 44.0
+                )
+                if safe_cond:
+                    self.clean_seconds += 1
+                    if self.clean_seconds >= self.deescalate_delay_s and self.mode_dwell_s >= self.min_dwell_s:
+                        self.mode = "DEGRADED"
+                        self.mode_dwell_s = 0.0
+                        self.clean_seconds = 0
+                else:
+                    self.clean_seconds = 0
+
+            elif self.mode == "DEGRADED":
+                # To de-escalate from DEGRADED to NOMINAL, BOTH temp sensors must be ok,
+                # no active interventions or deratings, and conditions safe
+                safe_cond = (
+                    ta_status == "ok" and tb_status == "ok" and
+                    not self.intervened and
+                    not any(a in action_names for a in ["clamp_current", "force_pump", "lookahead_derate"]) and
+                    meas_flow >= 3.0 and self.pump_forced_t is None and
+                    trusted_t < 45.0 and pred_T <= 44.0
+                )
+                if safe_cond:
+                    self.clean_seconds += 1
+                    if self.clean_seconds >= self.deescalate_delay_s and self.mode_dwell_s >= self.min_dwell_s:
+                        self.mode = "NOMINAL"
+                        self.mode_dwell_s = 0.0
+                        self.clean_seconds = 0
+                else:
+                    self.clean_seconds = 0
 
         # Enforce Mode Constraints
         if self.mode == "SHUTDOWN":

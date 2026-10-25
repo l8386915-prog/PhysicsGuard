@@ -302,6 +302,53 @@ class PhysicsGuard:
     # PUBLIC API
     # ======================================================================
 
+    def initialize_twin_from_measured(self, measured: Dict[str, Any]) -> None:
+        """
+        Initialise the guard's twin temperature from the first valid MEASURED
+        temperature signals (strictly no true_* values).
+        Evaluates valid readings from temp_cell_a, temp_cell_b, coolant_temp_in,
+        and ambient_temp to place the internal twin in sync with initial physical state.
+        """
+        if not self._first_step:
+            return
+
+        valid_flags, resolved = self._resolve_signals(measured)
+        self._last_valid_flags = valid_flags
+        self._last_resolved = resolved
+
+        # Candidate initial temperatures from valid measured channels
+        ta_val = resolved.get("temp_cell_a") if valid_flags.get("temp_cell_a") else None
+        tb_val = (resolved.get("temp_cell_b") - 0.25) if valid_flags.get("temp_cell_b") else None
+        tin_val = resolved.get("coolant_temp_in") if valid_flags.get("coolant_temp_in") else None
+        tamb_val = resolved.get("ambient_temp") if valid_flags.get("ambient_temp") else None
+
+        if ta_val is not None and tb_val is not None:
+            # If both agree within 2.0 C, use mean
+            if abs(ta_val - tb_val) <= 2.0:
+                init_T = 0.5 * (ta_val + tb_val)
+            else:
+                # Sensors disagree at start (e.g. sensor A frozen at 25C while pack is at 35C in demo_hot_attack)
+                # Use environmental reference (coolant inlet or ambient) to break the tie
+                ref = tin_val if tin_val is not None else (tamb_val if tamb_val is not None else params.T_AMBIENT_NOMINAL_C)
+                if abs(ta_val - ref) <= abs(tb_val - ref):
+                    init_T = ta_val
+                else:
+                    init_T = tb_val
+        elif ta_val is not None:
+            init_T = ta_val
+        elif tb_val is not None:
+            init_T = tb_val
+        elif tin_val is not None:
+            init_T = tin_val
+        elif tamb_val is not None:
+            init_T = tamb_val
+        else:
+            init_T = params.T_AMBIENT_NOMINAL_C
+
+        self._twin.T_batt = float(init_T)
+        self._twin.T_cool_out = float(resolved.get("coolant_temp_out", tin_val if tin_val is not None else init_T))
+        self._first_step = False
+
     def update(
         self,
         t: float,
@@ -363,18 +410,9 @@ class PhysicsGuard:
         # with the actual session (e.g., hot_day starts at 35C not 25C).
         # ------------------------------------------------------------------
         if self._first_step:
-            self._first_step = False
-            # Estimate initial pack temperature from valid temp sensors
-            init_temps = []
-            if valid_flags.get("temp_cell_a", False):
-                init_temps.append(resolved["temp_cell_a"])
-            if valid_flags.get("temp_cell_b", False):
-                init_temps.append(resolved["temp_cell_b"] - 0.25)
-            if init_temps:
-                init_T = float(np.mean(init_temps))
-                self._twin.T_batt = init_T
-                self._twin.T_cool_out = resolved.get("coolant_temp_out",
-                                                      resolved.get("coolant_temp_in", init_T))
+            self.initialize_twin_from_measured(measured)
+            valid_flags = self._last_valid_flags
+            resolved = self._last_resolved
 
         # ------------------------------------------------------------------
         # Step 1: Update twin with delivered current command, flow input,
@@ -480,8 +518,8 @@ class PhysicsGuard:
           - Both temps trusted -> average of temp_a and (temp_b - 0.25).
           - temp_a blamed -> temp_b - 0.25.
           - temp_b blamed -> temp_a.
-          - Both suspect/bad -> twin temperature + 1.6 C conservative margin
-            (justified by max twin error 1.56 C from results_twin_error.csv).
+          - Both suspect/bad -> twin temperature + calibrated margin
+            (derived from 99th percentile twin error in results_twin_error_extended.csv).
         """
         trust = self.sensor_trust()
         t_a_ok = (trust.get("temp_cell_a") == "ok")
@@ -497,7 +535,7 @@ class PhysicsGuard:
         elif t_b_ok and not t_a_ok:
             return float(t_b_val)
         else:
-            return float(self._twin.T_batt + 1.6)
+            return float(self._twin.T_batt + getattr(params, "TWIN_TEMP_MARGIN_C", 3.0))
 
     def sensor_trust(self) -> Dict[str, str]:
         """
@@ -527,7 +565,10 @@ class PhysicsGuard:
 
             # Check 4: Accumulating persistence counter or soft suspicion
             suspect = any(
-                (ch in k or (ch == "temp_cell_a" and "C3_a" in k) or (ch == "temp_cell_b" and "C3_b" in k))
+                ((ch in k and not any(other in k for other in channels if other != ch)) or
+                 (ch == "temp_cell_a" and "C3_a" in k) or
+                 (ch == "temp_cell_b" and "C3_b" in k) or
+                 (ch in ("temp_cell_a", "temp_cell_b") and "C3_both" in k))
                 and count > 0 for k, count in self._persist.items()
             )
             if suspect:
@@ -683,26 +724,40 @@ class PhysicsGuard:
 
         # Learning phase: collect baseline offset
         if t <= CALIB_WINDOW_S:
-            self._r3_baseline_vals.append(r3_raw)
-            residuals["R3"] = r3_raw
-            return
+            if abs(r3_raw - (-0.25)) > 2.0:
+                # Immediate redundancy disagreement at start (e.g. frozen sensor in demo_hot_attack)
+                # Do not corrupt learned baseline; proceed directly to redundancy check with nominal offset
+                self._r3_offset = -0.25
+            else:
+                self._r3_baseline_vals.append(r3_raw)
+                residuals["R3"] = r3_raw
+                return
 
         # After learning, compute mean offset if not yet done
         if self._r3_offset is None:
             if self._r3_baseline_vals:
                 self._r3_offset = float(np.mean(self._r3_baseline_vals))
             else:
-                self._r3_offset = 0.0
+                self._r3_offset = -0.25
 
         # Residual relative to learned offset
         R3 = r3_raw - self._r3_offset
         residuals["R3"] = R3
 
-        # Determine which sensor disagrees more with the twin
+        # Task 1 Tie-breaker: Determine which sensor agrees with the twin within calibrated tolerance
         twin_T = self._twin.T_batt
         ta_err = abs(ta - twin_T)
         tb_err = abs(tb - 0.25 - twin_T)
-        blamed_sensor = "temp_cell_a" if ta_err >= tb_err else "temp_cell_b"
+        tol = self._thr.get("R1_threshold_c", 3.0)
+
+        if ta_err <= tol and tb_err > tol:
+            blamed = ["temp_cell_b"]
+        elif tb_err <= tol and ta_err > tol:
+            blamed = ["temp_cell_a"]
+        elif ta_err > tol and tb_err > tol:
+            blamed = ["temp_cell_a", "temp_cell_b"]
+        else:
+            blamed = ["temp_cell_a"] if ta_err >= tb_err else ["temp_cell_b"]
 
         # Instant alarm for large jumps (no persistence)
         if abs(R3) > C2_JUMP_INSTANT_THRESHOLD_C:
@@ -711,7 +766,7 @@ class PhysicsGuard:
                 "diagnosis": "SENSOR_SPOOF",
                 "alarm": "critical",
                 "is_attack": True,
-                "blamed": [blamed_sensor],
+                "blamed": blamed,
                 "reasons": [
                     f"C2: Redundancy jump R3={R3:.2f} C (offset={self._r3_offset:.2f} C) "
                     f"exceeds instant threshold {C2_JUMP_INSTANT_THRESHOLD_C} C"
@@ -729,7 +784,7 @@ class PhysicsGuard:
                 "diagnosis": "SENSOR_SPOOF",
                 "alarm": "warning",
                 "is_attack": True,
-                "blamed": [blamed_sensor],
+                "blamed": blamed,
                 "reasons": [
                     f"C2: CUSUM or threshold alarm on R3={R3:.2f} C "
                     f"(threshold={thr:.2f} C, S+={self._cusum_r3.s_pos:.2f})"
@@ -783,13 +838,12 @@ class PhysicsGuard:
 
         if a_bad and b_bad:
             # Both deviate - could be twin drifting or environmental condition
-            # Blame neither individually; just issue a warning
             findings.append({
                 "check": "C3_both",
                 "diagnosis": "SENSOR_SPOOF",
                 "alarm": "warning",
                 "is_attack": None,   # undetermined - could be model error
-                "blamed": [],
+                "blamed": ["temp_cell_a", "temp_cell_b"],
                 "reasons": [
                     f"C3: Both temp sensors deviate from twin (R1a={R1a:.2f} C, "
                     f"R1b={R1b:.2f} C, threshold={thr:.2f} C) - cause undetermined"

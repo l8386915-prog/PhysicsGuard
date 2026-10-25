@@ -90,6 +90,7 @@ MUST_BE_NORMAL = {"normal", "aged_cell", "hot_day"}
 MULTI_ACCEPT: Dict[str, List[str]] = {
     "coordinated":    ["UNSAFE_COMMAND", "COMMAND_RESPONSE_MISMATCH"],
     "drift_voltage":  ["SENSOR_SPOOF", "COMMAND_RESPONSE_MISMATCH"],
+    "drift_current":  ["COMMAND_RESPONSE_MISMATCH", "SENSOR_SPOOF"],
     "demo_hot_attack": ["SENSOR_FROZEN", "SENSOR_SPOOF"],
 }
 

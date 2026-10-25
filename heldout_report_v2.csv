@@ -1,0 +1,33 @@
+metric_type,class_or_type,protected_count,protected_rate,protected_ci_95,unprotected_count,unprotected_rate,unprotected_ci_95,median_lat_s,p95_lat_s,sample_count
+attack_detection,freeze_temp_a,17 of 17,1.0,"[0.816, 1.000]",0 of 17,0.0,"[0.000, 0.184]",12.0,12.0,17
+attack_detection,spike_temp_a,17 of 17,1.0,"[0.816, 1.000]",0 of 17,0.0,"[0.000, 0.184]",0.0,0.0,17
+attack_detection,drift_temp_a,17 of 17,1.0,"[0.816, 1.000]",0 of 17,0.0,"[0.000, 0.184]",30.0,35.8,17
+attack_detection,replay_temp_a,17 of 17,1.0,"[0.816, 1.000]",0 of 17,0.0,"[0.000, 0.184]",6.0,6.2,17
+attack_detection,dead_sensor_flatline_temp_a,17 of 17,1.0,"[0.816, 1.000]",0 of 17,0.0,"[0.000, 0.184]",12.0,12.0,17
+attack_detection,dead_sensor_nan_temp_a,17 of 17,1.0,"[0.816, 1.000]",0 of 17,0.0,"[0.000, 0.184]",0.0,0.0,17
+attack_detection,abusive_command,17 of 17,1.0,"[0.816, 1.000]",0 of 17,0.0,"[0.000, 0.184]",5.0,5.0,17
+attack_detection,pump_off,17 of 17,1.0,"[0.816, 1.000]",0 of 17,0.0,"[0.000, 0.184]",5.0,5.0,17
+attack_detection,coordinated,16 of 16,1.0,"[0.806, 1.000]",0 of 16,0.0,"[0.000, 0.194]",5.0,5.0,16
+attack_detection,drift_current,16 of 16,1.0,"[0.806, 1.000]",0 of 16,0.0,"[0.000, 0.194]",55.0,56.2,16
+attack_detection,drift_voltage,16 of 16,1.0,"[0.806, 1.000]",0 of 16,0.0,"[0.000, 0.194]",106.0,149.2,16
+attack_detection,demo_hot_attack,16 of 16,1.0,"[0.806, 1.000]",0 of 16,0.0,"[0.000, 0.194]",0.0,0.0,16
+non_attack_metric,false_intervention_rate,0 of 100,0.0,"[0.000, 0.037]",0 of 100,0.0,"[0.000, 0.037]",,,100
+non_attack_metric,false_alarm_rate,0 of 100,0.0,"[0.000, 0.037]",0 of 100,0.0,"[0.000, 0.037]",,,100
+thermal_safety,peak_temp_below_45C,300 of 300,1.0,"[0.987, 1.000]",284 of 300,0.9467,"[0.915, 0.967]",,,300
+thermal_safety,peak_temp_below_50C,300 of 300,1.0,"[0.987, 1.000]",287 of 300,0.9567,"[0.927, 0.975]",,,300
+charge_time_penalty,abusive_command,17,0.0025,,baseline,0.0,,0.25,0.54,17
+charge_time_penalty,aged_cell,25,0.0006,,baseline,0.0,,0.06,0.73,25
+charge_time_penalty,coordinated,16,0.0031,,baseline,0.0,,0.31,0.44,16
+charge_time_penalty,dead_sensor_flatline_temp_a,17,0.0,,baseline,0.0,,0.0,10.4,17
+charge_time_penalty,dead_sensor_nan_temp_a,17,0.0,,baseline,0.0,,0.0,0.0,17
+charge_time_penalty,demo_hot_attack,16,0.0014,,baseline,0.0,,0.14,0.41,16
+charge_time_penalty,drift_current,16,0.0,,baseline,0.0,,0.0,0.0,16
+charge_time_penalty,drift_temp_a,17,0.0,,baseline,0.0,,0.0,0.0,17
+charge_time_penalty,drift_voltage,16,0.0,,baseline,0.0,,0.0,0.0,16
+charge_time_penalty,freeze_temp_a,17,0.0,,baseline,0.0,,0.0,38.44,17
+charge_time_penalty,hot_day,25,0.0,,baseline,0.0,,0.0,0.0,25
+charge_time_penalty,normal,25,0.0,,baseline,0.0,,0.0,0.0,25
+charge_time_penalty,pump_degradation,25,0.0,,baseline,0.0,,0.0,0.0,25
+charge_time_penalty,pump_off,17,0.0019,,baseline,0.0,,0.19,0.41,17
+charge_time_penalty,replay_temp_a,17,0.0,,baseline,0.0,,0.0,0.0,17
+charge_time_penalty,spike_temp_a,17,0.0,,baseline,0.0,,0.0,0.0,17

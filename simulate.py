@@ -111,6 +111,8 @@ def run_session(
                     plant.age_factor = float(v)
                 elif hasattr(plant, k):
                     setattr(plant, k, v)
+        plant.T_amb = float(ambient_c)
+        plant.T_cool_in = float(inlet_c)
 
     # Reset controller state if supported
     if hasattr(controller, "reset"):

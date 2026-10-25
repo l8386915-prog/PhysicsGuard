@@ -142,9 +142,9 @@ class Plant:
         self.vp: float = 0.0                          # Polarization capacitor voltage [V]
         self.T_batt: float = float(initial_temp_c)    # Battery pack temperature [deg C]
         self.pump_flow_lpm: float = 0.0               # Actual coolant volumetric flow [L/min]
-        self.T_cool_in: float = params.T_COOLANT_INLET_NOMINAL_C   # Coolant inlet [deg C]
-        self.T_cool_out: float = params.T_COOLANT_INLET_NOMINAL_C  # Coolant outlet [deg C]
-        self.T_amb: float = params.T_AMBIENT_NOMINAL_C             # Ambient temperature [deg C]
+        self.T_cool_in: float = float(initial_temp_c)   # Coolant inlet in equilibrium [deg C]
+        self.T_cool_out: float = float(initial_temp_c)  # Coolant outlet in equilibrium [deg C]
+        self.T_amb: float = float(initial_temp_c)             # Ambient temperature in equilibrium [deg C]
 
         # Electrical variables at current time step
         self.i_pack: float = 0.0                      # Total pack current [A]

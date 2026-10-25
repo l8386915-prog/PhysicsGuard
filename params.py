@@ -228,3 +228,9 @@ SOC_TARGET: float = 0.80   # Fast charge terminates at 80% SOC
 # Pack charging current at rated cell current [A]
 # 4.0 A per cell * 32 parallel cells = 128.0 A total pack charging current.
 PACK_RATED_CHARGE_CURRENT_A: float = CELL_RATED_CHARGE_CURRENT_A * PACK_N_PARALLEL  # 128.0 A
+
+# Conservative digital twin temperature safety margin [deg C]
+# Recomputed from 99th-percentile error (2.58 C) over 40 tuning seeds (seeds 100-139), rounded up to 0.5 C.
+# Stored in outputs/results_twin_error_extended.csv.
+TWIN_TEMP_MARGIN_C: float = 3.0
+

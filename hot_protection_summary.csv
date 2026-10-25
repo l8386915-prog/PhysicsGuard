@@ -1,0 +1,9 @@
+scenario,mode,sample_count,peak_temp_median_c,peak_temp_worst_c,seconds_above_45C_median,seconds_above_45C_worst,seconds_above_50C_median,seconds_above_50C_worst,final_soc_median,final_soc_worst,charge_time_s_median,charge_time_s_worst
+pump_off,unprotected,6,46.16,46.56,761,1100,0,0,0.801,0.799,2351.0,2544.0
+pump_off,protected,6,42.06,42.32,0,0,0,0,0.802,0.8,1773.0,1811.0
+abusive_command,unprotected,6,49.25,50.02,396,462,0,9,0.802,0.8,1210.0,1267.0
+abusive_command,protected,6,43.87,44.34,0,0,0,0,0.8,0.8,1596.0,1602.0
+coordinated,unprotected,6,49.86,51.12,534,625,0,119,0.8,0.8,1594.0,1602.0
+coordinated,protected,6,38.94,40.14,0,0,0,0,0.8,0.799,6382.5,7058.0
+demo_hot_attack,unprotected,6,50.51,51.58,605,675,58,169,0.8,0.8,1594.0,1602.0
+demo_hot_attack,protected,6,42.07,42.32,0,0,0,0,0.802,0.8,1773.0,1811.0

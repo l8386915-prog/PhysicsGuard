@@ -443,3 +443,12 @@ def test_stagnant_coolant_outlet_rises():
         f"Measured stagnant coolant outlet ({t_out_600:.2f} C) is not more than 3 C above "
         f"inlet ({t_in_600:.2f} C) after 300 s with pump off! Delta={delta:.2f} C"
     )
+
+
+def test_overall_pytest_passes():
+    """Phase 5.2 Item 6: Assert that overall pytest suite passes cleanly."""
+    import subprocess
+    cmd = [sys.executable, "-m", "pytest", "-k", "not test_overall_pytest_passes", "-q"]
+    res = subprocess.run(cmd, capture_output=True, text=True)
+    assert res.returncode == 0, f"Pytest suite did not pass cleanly:\n{res.stdout}\n{res.stderr}"
+
