@@ -1,2 +1,10 @@
-# Created by pytest automatically.
-*
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+*.egg-info/
+dist/
+build/
+.coverage
+htmlcov/
+scratch/
