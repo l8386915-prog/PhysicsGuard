@@ -192,24 +192,25 @@ def test_twin_independence():
     """
     Test B d: Twin Independence & Observer Isolation.
     
-    Proves that the Digital Twin only receives measured current, measured pump flow,
-    measured ambient, and measured coolant inlet, and NEVER receives plant true
-    values, plant objects, or perturbed plant parameters.
+    Proves that the Twin class has no reference to a Plant object,
+    that step_estimator takes only measured current, flow, ambient and coolant inlet,
+    and that changing the plant's true state does not change the twin's output.
     """
-    # 1. Method signature verification
+    # 1. Method signature verification: step_estimator takes only measured inputs
     sig = inspect.signature(Twin.step_estimator)
     allowed_params = ["self", "i_pack_meas", "pump_flow_meas", "T_amb_meas", "T_cool_in_meas", "dt"]
     for param_name in sig.parameters.keys():
         assert param_name in allowed_params, f"Unexpected parameter {param_name} in Twin.step_estimator!"
 
-    # 2. Structural independence from Plant instance
+    # 2. Structural independence: Twin class has no reference to a Plant object
     twin = Twin(initial_soc=0.20, initial_temp_c=25.0)
     plant = Plant(perturb=True, seed=123, age_factor=1.4)
 
-    # Assert twin retains nominal constants completely different from perturbed plant
-    assert twin.r0 != plant.r0_25
-    assert twin.c_pack != plant.c_pack
     assert not hasattr(twin, "plant")
+    for attr_name, val in twin.__dict__.items():
+        assert not isinstance(val, Plant), f"Twin attribute '{attr_name}' references a Plant object!"
+    # Ensure Twin class definition does not reference Plant
+    assert "Plant" not in [c.__name__ for c in Twin.__mro__]
 
     # 3. Feed synthetic measured dictionary to step_estimator (no Plant passed)
     synthetic_meas = {
@@ -218,30 +219,51 @@ def test_twin_independence():
         "ambient_temp": 25.0,
         "coolant_temp_in": 25.0
     }
-    pred = twin.step_estimator(
+    pred_1 = twin.step_estimator(
         i_pack_meas=synthetic_meas["pack_current"],
         pump_flow_meas=synthetic_meas["pump_flow_lpm"],
         T_amb_meas=synthetic_meas["ambient_temp"],
         T_cool_in_meas=synthetic_meas["coolant_temp_in"],
         dt=1.0
     )
-    assert "temp_cell_a" in pred
-    assert "pack_voltage" in pred
+    assert "temp_cell_a" in pred_1
+    assert "pack_voltage" in pred_1
 
-    # 4. Modifying internal hidden plant variables has ZERO effect on Twin
-    t_twin_before = twin.T_batt
+    # 4. Changing the plant's true state does not change the twin's output
+    twin_isolated = Twin(initial_soc=0.20, initial_temp_c=25.0)
+    pred_isolated_1 = twin_isolated.step_estimator(
+        i_pack_meas=synthetic_meas["pack_current"],
+        pump_flow_meas=synthetic_meas["pump_flow_lpm"],
+        T_amb_meas=synthetic_meas["ambient_temp"],
+        T_cool_in_meas=synthetic_meas["coolant_temp_in"],
+        dt=1.0
+    )
+
+    # Heavily alter/corrupt plant state
     plant.T_batt = 9999.0
     plant.vp = 50.0
-    twin.step_estimator(
+    plant.soc = 0.05
+    plant.v_pack = 1000.0
+
+    pred_twin_after = twin.step_estimator(
         i_pack_meas=synthetic_meas["pack_current"],
         pump_flow_meas=synthetic_meas["pump_flow_lpm"],
         T_amb_meas=synthetic_meas["ambient_temp"],
         T_cool_in_meas=synthetic_meas["coolant_temp_in"],
         dt=1.0
     )
-    # The twin advances by normal expected thermal rise, unaffected by plant corruption
-    delta_t = twin.T_batt - t_twin_before
-    assert 0.0 < delta_t < 0.1, "Twin was corrupted by external plant state!"
+
+    pred_isolated_after = twin_isolated.step_estimator(
+        i_pack_meas=synthetic_meas["pack_current"],
+        pump_flow_meas=synthetic_meas["pump_flow_lpm"],
+        T_amb_meas=synthetic_meas["ambient_temp"],
+        T_cool_in_meas=synthetic_meas["coolant_temp_in"],
+        dt=1.0
+    )
+
+    assert pred_twin_after["temp_cell_a"] == pred_isolated_after["temp_cell_a"]
+    assert pred_twin_after["pack_voltage"] == pred_isolated_after["pack_voltage"]
+    assert pred_twin_after["soc_estimate"] == pred_isolated_after["soc_estimate"]
 
 
 def test_unprotected_cyberattack():

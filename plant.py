@@ -153,6 +153,11 @@ class Plant:
         self.v_pack: float = self.v_cell * self.n_series    # Total pack voltage [V]
         self.p_cmd_kw: float = 0.0                    # Charger power command [kW]
 
+        # Commanded inputs & actuator limits
+        self.applied_current_cmd: float = 0.0
+        self.last_applied_current_cmd: float = 0.0
+        self.max_pump_flow_lpm: float = 50.0
+
         # Thermal rate variables [W]
         self.q_heat: float = 0.0                      # Heat generated in pack [W]
         self.q_cool: float = 0.0                      # Heat removed by coolant [W]
@@ -272,7 +277,8 @@ class Plant:
         # Equation: d(Flow)/dt = (Flow_cmd - Flow) / tau_pump
         # Real fluid pumps cannot jump instantaneously to target flow rate.
         d_flow = (pump_cmd_lpm - self.pump_flow_lpm) / self.tau_pump
-        self.pump_flow_lpm = float(np.clip(self.pump_flow_lpm + d_flow * dt, 0.0, 50.0))
+        max_flow = getattr(self, "max_pump_flow_lpm", 50.0)
+        self.pump_flow_lpm = float(np.clip(self.pump_flow_lpm + d_flow * dt, 0.0, max_flow))
 
         # ----------------------------------------------------------------------
         # 2. CHARGING CONTROL & ELECTRICAL STATES
@@ -287,10 +293,14 @@ class Plant:
         max_i_pack = max_i_cell * self.n_parallel
 
         if current_cmd_a is not None:
+            self.applied_current_cmd = float(current_cmd_a)
+            self.last_applied_current_cmd = float(current_cmd_a)
             # Follow commanded current, subject to cell voltage <= 4.20 V clamp
             self.i_pack = float(np.clip(current_cmd_a, 0.0, max_i_pack))
         else:
             self.i_pack = self.compute_charging_current(pump_cmd_lpm)
+            self.applied_current_cmd = self.i_pack
+            self.last_applied_current_cmd = self.i_pack
 
         # Cell-level current (pack current divided evenly across 32 strings)
         self.i_cell = self.i_pack / self.n_parallel
@@ -421,8 +431,10 @@ class Plant:
         # Ambient air temperature
         t_amb_meas = float(self.T_amb + self.sensor_rng.normal(0.0, 0.10))
 
-        # Charger commanded power in kW
-        p_cmd_meas = float(max(0.0, self.p_cmd_kw + self.sensor_rng.normal(0.0, 0.05)))
+        # Charger commanded power in kW:
+        # charger_power_cmd_kw = applied_current_cmd * true pack voltage / 1000 + noise (std 0.05 kW)
+        p_cmd_kw_val = (self.applied_current_cmd * self.v_pack) / 1000.0
+        p_cmd_meas = float(p_cmd_kw_val + self.sensor_rng.normal(0.0, 0.05))
 
         return {
             "pack_voltage": v_pack_meas,

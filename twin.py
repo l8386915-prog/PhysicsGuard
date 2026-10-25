@@ -2,29 +2,18 @@
 PhysicsGuard - Digital Twin Model (The Simplified Observer)
 ============================================================
 The Digital Twin is an engineering surrogate model of the physical system,
-used in subsequent phases by the PhysicsGuard cyberattack anomaly detector.
+used by the PhysicsGuard cybersecurity framework.
 
-Key Differences from the Physical Plant:
-  1. Simplified 0-RC (Rint) equivalent circuit: no polarization capacitor (Vp = 0).
-  2. Constant DC internal resistance: R_dc = R0 + Rp, with no temperature dependence
-     and no electrochemical ageing factor.
+Model Specifications:
+  1. Nominal 1-RC electrical state: Vp with dVp/dt = -Vp/(Rp*Cp) + I_cell/Cp
+     using nominal Rp, Cp; V_cell = OCV_table(soc) + I_cell*R0 + Vp;
+     heat per cell = I_cell^2*R0 + Vp^2/Rp, with R0 = CELL_R0_25C_OHM (0.030).
+  2. Still NO temperature dependence, NO ageing, NO OCV bump, constant
+     nominal cold-plate UA (no flow exponent).
   3. Uses strictly nominal parameters (no random manufacturing perturbations).
   4. Deterministic: zero sensor noise.
-  5. Estimator mode: ingests measured/commanded signals (current, flow, ambient)
+  5. Estimator mode: ingests measured inputs (current, flow, ambient, coolant inlet)
      and predicts expected physical battery temperature and coolant outlet temperature.
-
-Beginner Mechanical Engineering Note:
--------------------------------------
-Why R_dc = R0 + Rp?
-In an RC circuit, a capacitor behaves as an open-circuit to steady direct current (DC).
-Therefore, all current passes through both R0 and Rp in steady state. A simplified
-0-RC model lumps these together: R_int = R0 + Rp.
-
-Twin Honesty:
--------------
-R0 + Rp is the steady-state effective heating resistance at constant current, and
-it was NOT tuned by repeated test runs. Also note that at 35 C the plant's real
-resistance is lower, so the twin slightly overestimates heat.
 """
 
 from typing import Dict, Any, Optional
@@ -43,7 +32,7 @@ class Twin:
         self,
         initial_soc: float = params.SOC_INITIAL,
         initial_temp_c: float = params.T_AMBIENT_NOMINAL_C,
-        r0_nominal: float = params.CELL_R0_25C_OHM + params.CELL_RP_OHM
+        r0_nominal: float = params.CELL_R0_25C_OHM
     ):
         """
         Initialize the Digital Twin.
@@ -56,7 +45,7 @@ class Twin:
             Initial estimated pack temperature.
         r0_nominal : float
             Constant DC internal resistance per cell [Ohm].
-            Default is R0 + Rp = 0.030 + 0.015 = 0.045 Ohm.
+            Default is R0 = CELL_R0_25C_OHM (0.030 Ohm).
         """
         # Pack architecture (identical nominal dimensions)
         self.n_series: int = params.PACK_N_SERIES         # 89 cells in series
@@ -65,10 +54,9 @@ class Twin:
         self.q_cell_coulombs: float = params.CELL_CAPACITY_COULOMBS
 
         # Nominal parameters (constant, no perturbations, no temperature scaling)
-        # NOTE: R0 + Rp is the steady-state effective heating resistance at constant current,
-        # and it was NOT tuned by repeated test runs. Also note that at 35 C the plant's real
-        # resistance is lower, so the twin slightly overestimates heat.
         self.r0: float = float(r0_nominal)
+        self.rp: float = float(params.CELL_RP_OHM)
+        self.cp: float = float(params.CELL_CP_F)
         self.c_pack: float = params.PACK_TOTAL_HEAT_CAPACITY_J_PER_K
         self.ua_cold_plate: float = params.COOLING_UA_COLD_PLATE_W_PER_K
         self.ua_ambient: float = params.CASING_UA_AMBIENT_W_PER_K
@@ -78,6 +66,7 @@ class Twin:
 
         # Dynamic State Estimates
         self.soc: float = float(initial_soc)
+        self.vp: float = 0.0                          # Polarization capacitor voltage [V]
         self.T_batt: float = float(initial_temp_c)
         self.pump_flow_lpm: float = 0.0
         self.T_cool_in: float = params.T_COOLANT_INLET_NOMINAL_C
@@ -134,31 +123,33 @@ class Twin:
         self.T_amb = float(T_amb_meas)
         self.T_cool_in = float(T_cool_in_meas)
 
-        # 1. Electrical Calculation
-        # Cell current = pack current / 32 strings
+        # 1. Electrical Calculation: 1-RC nominal model
         self.i_cell = self.i_pack / self.n_parallel
-
-        # Cell terminal voltage: 0-RC simplified model (V = OCV + I*R0)
         ocv = params.evaluate_ocv(self.soc)
-        self.v_cell = ocv + self.i_cell * self.r0
+        self.v_cell = ocv + self.i_cell * self.r0 + self.vp
         self.v_pack = self.v_cell * self.n_series
         self.p_cmd_kw = (self.v_pack * self.i_pack) / 1000.0
 
-        # 2. State of Charge Update (Coulomb Counting)
+        # 2. Dynamic States Update: Polarization voltage & SOC Coulomb counting
+        # dVp/dt = -Vp / (Rp * Cp) + I_cell / Cp
+        d_vp = (-self.vp / (self.rp * self.cp) + self.i_cell / self.cp) * dt
+        self.vp += d_vp
+
+        # dSOC/dt = I_cell / Q_cell_coulombs
         d_soc = (self.i_cell * dt) / self.q_cell_coulombs
         self.soc = float(np.clip(self.soc + d_soc, 0.0, 1.0))
 
-        # 3. Joule Heat Generation
-        # Cell heat = I_cell^2 * R0 (constant R0, no polarization state Vp)
-        q_cell = (self.i_cell ** 2) * self.r0
+        # 3. Joule & Polarization Heat Generation:
+        # heat per cell = I_cell^2 * R0 + Vp^2 / Rp
+        q_cell = (self.i_cell ** 2) * self.r0 + (self.vp ** 2) / self.rp
         self.q_heat = self.n_cells * q_cell
 
-        # 4. Coolant Heat Removal (Effectiveness-NTU method with nominal parameters)
+        # 4. Coolant Heat Removal (Effectiveness-NTU method with constant nominal UA, no flow exponent)
         flow_m3_s = (self.pump_flow_lpm / 1000.0) / 60.0
         m_dot = self.rho_coolant * flow_m3_s
         c_dot = m_dot * self.cp_coolant
 
-        if c_dot < 1e-4:
+        if c_dot < 1e-4 or self.pump_flow_lpm <= 0.0:
             self.q_cool = 0.0
             self.T_cool_out = self.T_cool_in
         else:
@@ -203,10 +194,10 @@ class Twin:
             if self.soc >= params.SOC_TARGET:
                 i_pack = 0.0
             else:
-                # CC clamp logic
+                # CC clamp logic with 1-RC headroom
                 i_cell_rated = params.CELL_RATED_CHARGE_CURRENT_A
                 ocv = params.evaluate_ocv(self.soc)
-                v_headroom = params.CELL_V_MAX - ocv
+                v_headroom = params.CELL_V_MAX - ocv - self.vp
                 i_cell_max = max(0.0, v_headroom / self.r0) if v_headroom > 0 else 0.0
                 i_cell = min(i_cell_rated, i_cell_max)
                 i_pack = i_cell * self.n_parallel
@@ -255,7 +246,7 @@ class Twin:
             "true_pack_current": self.i_pack,
             "true_cell_voltage": self.v_cell,
             "true_cell_current": self.i_cell,
-            "true_vp": 0.0,
+            "true_vp": self.vp,
             "true_q_heat": self.q_heat,
             "true_q_cool": self.q_cool,
             "true_q_amb": self.q_amb,
@@ -265,3 +256,4 @@ class Twin:
             "true_ambient_temp": self.T_amb,
             "true_charger_power_kw": self.p_cmd_kw,
         }
+

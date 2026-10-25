@@ -1,11 +1,11 @@
 Scenario,Max_Temp_Error_C,Max_Pack_Voltage_Error_V,Peak_Plant_Temp_C,End_Twin_Temp_C
-(a) Nominal plant,1.042,6.172,35.06,36.1
-(b) Perturbed +/-10% (seed 1),0.961,4.465,35.15,36.11
-(b) Perturbed +/-10% (seed 2),1.137,5.954,34.97,36.1
-(b) Perturbed +/-10% (seed 3),1.402,5.366,34.71,36.12
-(b) Perturbed +/-10% (seed 4),0.306,6.19,35.84,36.11
-(b) Perturbed +/-10% (seed 5),0.321,6.513,36.32,36.05
-(c) Aged cell (R0 x1.3),0.795,6.087,36.75,36.08
-"(d) Hot day (amb 35C, inlet 35C)",1.578,6.451,42.13,43.69
-(e1) Pump degraded 6 L/min (twin told 10 L/min),0.525,6.172,36.63,36.1
-(e2) Pump degraded 6 L/min (twin using measured flow),0.171,6.172,36.63,36.54
+(a) Nominal plant,0.999,2.336,35.06,36.06
+(b) Perturbed +/-10% (seed 1),0.912,1.811,35.15,36.06
+(b) Perturbed +/-10% (seed 2),1.092,3.016,34.98,36.07
+(b) Perturbed +/-10% (seed 3),1.354,3.325,34.71,36.07
+(b) Perturbed +/-10% (seed 4),0.427,1.786,35.85,36.07
+(b) Perturbed +/-10% (seed 5),0.412,1.626,36.33,36.06
+(c) Aged cell (R0 x1.3),0.882,4.052,36.75,36.04
+"(d) Hot day (amb 35C, inlet 35C)",1.56,3.676,42.13,43.69
+(e1) Pump degraded 6 L/min (twin told 10 L/min),0.578,2.468,36.66,36.08
+(e2) Pump degraded 6 L/min (twin using measured flow),0.146,2.468,36.66,36.51

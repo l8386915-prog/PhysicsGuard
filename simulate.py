@@ -35,6 +35,8 @@ def run_session(
     seed: Optional[int] = None,
     sensor_tamper: Optional[Callable[[float, Dict[str, float]], Dict[str, float]]] = None,
     command_tamper: Optional[Callable[[float, Tuple[float, float]], Tuple[float, float]]] = None,
+    plant_hook: Optional[Callable[[float, Plant], None]] = None,
+    scenario: Optional[Any] = None,
     until_soc: float = 0.80,
     ambient_c: float = 25.0,
     inlet_c: float = 25.0,
@@ -53,10 +55,15 @@ def run_session(
     seed : int, optional
         Random seed for reproducible sensor noise.
     sensor_tamper : callable, optional
-        Function (t, measured_dict) -> dict applied BETWEEN plant.measure() and controller.
+        Function (t, measured_dict) -> dict applied to sensor measurements.
     command_tamper : callable, optional
-        Function (t, (current_cmd, pump_cmd)) -> (current_cmd, pump_cmd) applied BETWEEN
-        controller and plant.
+        Function (t, (current_cmd, pump_cmd)) -> (current_cmd, pump_cmd) applied
+        between controller and plant.
+    plant_hook : callable, optional
+        Function (t, plant) called every step before plant.step to alter plant
+        parameters dynamically over time.
+    scenario : Scenario, optional
+        Scenario descriptor specifying faults, cyberattacks, and metadata.
     until_soc : float, default 0.80
         Target State of Charge to terminate charging session.
     ambient_c : float, default 25.0 C
@@ -72,37 +79,66 @@ def run_session(
     -------
     pd.DataFrame
         DataFrame with measured signals, true signals, requested commands,
-        and applied commands.
+        applied commands, and scenario metadata.
     """
     if seed is not None:
         plant.sensor_rng = np.random.default_rng(seed)
 
-    records = []
-    # Initial measurement sampled prior to first control step
-    meas = plant.measure()
+    # Ingest scenario parameters if provided
+    if scenario is not None:
+        if sensor_tamper is None and scenario.sensor_tamper is not None:
+            sensor_tamper = scenario.sensor_tamper
+        if command_tamper is None and scenario.command_tamper is not None:
+            command_tamper = scenario.command_tamper
+        if plant_hook is None and scenario.plant_hook is not None:
+            plant_hook = scenario.plant_hook
+        if scenario.ambient_c is not None and ambient_c == 25.0:
+            ambient_c = float(scenario.ambient_c)
+        if scenario.inlet_c is not None and inlet_c == 25.0:
+            inlet_c = float(scenario.inlet_c)
+        if getattr(scenario, "plant_kwargs", None):
+            for k, v in scenario.plant_kwargs.items():
+                if k == "initial_temp_c":
+                    plant.T_batt = float(v)
+                    plant.initial_T_batt = float(v)
+                elif k == "age_factor":
+                    plant.age_factor = float(v)
+                elif hasattr(plant, k):
+                    setattr(plant, k, v)
 
+    # Reset controller state if supported
+    if hasattr(controller, "reset"):
+        controller.reset()
+
+    records = []
     max_steps = int(max_duration_s / dt)
     step_count = 0
+    latched_steps = 0
 
-    while plant.soc < until_soc and step_count < max_steps:
+    # Initial measurement sampled prior to first step
+    meas_raw = plant.measure()
+    if sensor_tamper is not None:
+        meas = sensor_tamper(plant.time_s, meas_raw.copy())
+    else:
+        meas = meas_raw.copy()
+
+    while step_count < max_steps:
         t = plant.time_s
 
-        # 1. Sensor tamper (intercepts measurement before reaching controller)
-        if sensor_tamper is not None:
-            meas_for_ctrl = sensor_tamper(t, meas.copy())
-        else:
-            meas_for_ctrl = meas.copy()
+        # 1. Controller determines commanded current and pump flow
+        req_current_a, req_pump_lpm = controller.compute_commands(meas)
 
-        # 2. Controller determines commanded current and pump flow
-        req_current_a, req_pump_lpm = controller.compute_commands(meas_for_ctrl)
-
-        # 3. Command tamper (intercepts actuation commands before reaching physical plant)
+        # 2. Command tamper intercepts actuation commands before physical plant
         if command_tamper is not None:
             appl_current_a, appl_pump_lpm = command_tamper(
                 t, (req_current_a, req_pump_lpm)
             )
         else:
             appl_current_a, appl_pump_lpm = req_current_a, req_pump_lpm
+
+        # 3. Plant hook called every step before plant.step
+        if plant_hook is not None:
+            plant_hook(t, plant)
 
         # 4. Advance physical plant by time step dt
         plant.step(
@@ -114,12 +150,18 @@ def run_session(
         )
 
         # 5. Sample updated state and post-step instrumentation
-        meas = plant.measure()
         true_state = plant.get_true_state()
+        t_post = true_state["time_s"]
+        meas_raw = plant.measure()
+
+        if sensor_tamper is not None:
+            meas = sensor_tamper(t_post, meas_raw.copy())
+        else:
+            meas = meas_raw.copy()
 
         row = {
-            "time": true_state["time_s"],
-            "time_s": true_state["time_s"],
+            "time": t_post,
+            "time_s": t_post,
             # Measured signals (10 channels)
             "pack_voltage": meas["pack_voltage"],
             "pack_current": meas["pack_current"],
@@ -157,7 +199,31 @@ def run_session(
             "current_cmd_a": float(appl_current_a),
             "pump_cmd_lpm": float(appl_pump_lpm),
         }
+
+        # Scenario columns if scenario is provided
+        if scenario is not None:
+            row["scenario"] = scenario.name
+            row["label_class"] = scenario.label_class
+            row["label_type"] = scenario.label_type
+            if scenario.start_s is not None and scenario.label_class != "normal":
+                row["event_active"] = bool(t_post >= scenario.start_s)
+            else:
+                row["event_active"] = False
+
         records.append(row)
         step_count += 1
 
+        # Check termination condition
+        if getattr(controller, "latched_stop", False):
+            latched_steps += 1
+            if latched_steps >= 2:
+                break
+        elif until_soc < getattr(controller, "soc_cutoff", 0.80) and plant.soc >= until_soc:
+            break
+        elif plant.soc >= until_soc and (command_tamper is None or appl_current_a == 0.0):
+            break
+        elif plant.soc >= 0.85:
+            break
+
     return pd.DataFrame(records)
+
