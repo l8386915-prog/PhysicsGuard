@@ -346,10 +346,12 @@ class Plant:
         # Fluid heat capacity rate [W/K]: C_dot = m_dot * cp
         c_dot = m_dot * self.cp_coolant
 
-        # If pump is turned off or flow is negligible, no heat is removed by fluid (UA = 0)
-        if c_dot < 1e-4 or self.pump_flow_lpm <= 0.0:
+        # If flow is below 1.0 L/min, coolant is stagnant: no heat removal,
+        # and the outlet temperature relaxes toward the pack temperature with
+        # a 90 s time constant (stagnant fluid warms up toward pack temperature).
+        if self.pump_flow_lpm < 1.0:
             self.q_cool = 0.0
-            self.T_cool_out = self.T_cool_in
+            self.T_cool_out += (self.T_batt - self.T_cool_out) / 90.0 * dt
         else:
             # Structural mismatch: cold-plate UA scales with flow:
             # UA = UA_nominal * (flow_lpm / 10.0) ** 0.6 (UA = 0 when flow is 0).

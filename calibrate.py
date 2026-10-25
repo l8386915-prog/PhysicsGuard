@@ -129,6 +129,9 @@ def run_calibration(max_steps: int = 3000) -> Dict[str, float]:
         "R1a": [], "R1b": [], "R2": [], "R3": [], "Rv": [],
         "Rflow": [], "Rcur": [],
     }
+    session_residuals: Dict[str, List[List[float]]] = {
+        "R3": [], "Rv": [], "Rcur": [],
+    }
 
     print("=" * 70)
     print("PhysicsGuard - Automatic Threshold Calibration")
@@ -140,9 +143,11 @@ def run_calibration(max_steps: int = 3000) -> Dict[str, float]:
         guard = PhysicsGuard()
 
         step = 0
-        # Initial measurement
         meas_raw = plant.measure()
         meas = meas_raw.copy()
+
+        session_history = []
+        prev_req_curr = 0.0
 
         while step < max_steps:
             t = plant.time_s
@@ -163,17 +168,50 @@ def run_calibration(max_steps: int = 3000) -> Dict[str, float]:
             # Call guard to compute residuals (only after calibration window)
             verdict = guard.update(t_post, meas, (appl_curr, appl_pump))
 
-            # Collect residuals from verdict
-            if t_post > CALIB_WINDOW_S:
-                for key in all_residuals.keys():
-                    val = verdict.residuals.get(key)
-                    if val is not None and np.isfinite(val):
-                        all_residuals[key].append(float(val))
+            d_curr = abs(req_curr - prev_req_curr)
+            prev_req_curr = req_curr
+            session_history.append((t_post, verdict.residuals, req_curr, d_curr))
 
             step += 1
-            # Stop early if SOC target reached
             if plant.soc >= params.SOC_TARGET:
                 break
+
+        # Process session residuals with A1 exclusions:
+        # Exclude final 10 s before end-of-charge and any step where controller
+        # current command changed by > 5 A from Rcur/Rv statistics.
+        n_steps = len(session_history)
+        sess_r3: List[float] = []
+        sess_rv: List[float] = []
+        sess_rcur: List[float] = []
+
+        for idx, (t_post, res, req_c, d_c) in enumerate(session_history):
+            if t_post <= CALIB_WINDOW_S:
+                continue
+
+            for key in ["R1a", "R1b", "R2", "R3", "Rflow"]:
+                val = res.get(key)
+                if val is not None and np.isfinite(val):
+                    all_residuals[key].append(float(val))
+                    if key == "R3":
+                        sess_r3.append(float(val))
+
+            # Exclusion rules for Rcur and Rv:
+            is_final_10s = (idx >= n_steps - 10)
+            is_curr_transient = (d_c > 5.0)
+
+            if not (is_final_10s or is_curr_transient):
+                v_cur = res.get("Rcur")
+                if v_cur is not None and np.isfinite(v_cur):
+                    all_residuals["Rcur"].append(float(v_cur))
+                    sess_rcur.append(float(v_cur))
+                v_v = res.get("Rv")
+                if v_v is not None and np.isfinite(v_v):
+                    all_residuals["Rv"].append(float(v_v))
+                    sess_rv.append(float(v_v))
+
+        session_residuals["R3"].append(sess_r3)
+        session_residuals["Rv"].append(sess_rv)
+        session_residuals["Rcur"].append(sess_rcur)
 
         print(f"  seed {seed:3d}: {step:4d} steps, SOC={plant.soc:.3f}")
 
@@ -204,12 +242,29 @@ def run_calibration(max_steps: int = 3000) -> Dict[str, float]:
 
         # Instant threshold = 1.5 * max absolute residual
         inst_thr = 1.5 * max_abs
-        # CUSUM k = 1.0 * std
-        cusum_k = 1.0 * std_r
-        # Compute max CUSUM value reached during tuning with this k
-        cusum_max_seen = _compute_cusum_max(vals, k=cusum_k)
-        # CUSUM h = 1.5 * max CUSUM seen
-        cusum_h = 1.5 * cusum_max_seen if cusum_max_seen > 0 else 3.0 * std_r
+        # CUSUM k = 1.0 * std; for Rv, include baseline offset to prevent normal accumulation
+        if key == "Rv":
+            cusum_k = max(1.0 * std_r, abs(mean_r) + 1.5 * std_r)
+        else:
+            cusum_k = 1.0 * std_r
+
+
+        # For CUSUM, evaluate peak across individual sessions
+        sess_list = session_residuals.get(key, [])
+        if sess_list:
+            max_s_seen = 0.0
+            for s_res in sess_list:
+                if s_res:
+                    s_max = _compute_cusum_max(s_res, k=cusum_k)
+                    max_s_seen = max(max_s_seen, s_max)
+            cusum_h = 1.5 * max_s_seen if max_s_seen > 0 else 3.0 * std_r
+        else:
+            cusum_max_seen = _compute_cusum_max(vals, k=cusum_k)
+            cusum_h = 1.5 * cusum_max_seen if cusum_max_seen > 0 else 3.0 * std_r
+
+        # Cap CUSUM h <= 10 * k (to prevent unbounded multi-session accumulation)
+        if cusum_k > 0:
+            cusum_h = min(cusum_h, 10.0 * cusum_k)
 
         thresholds[key] = {
             "inst_threshold": inst_thr,
@@ -250,21 +305,24 @@ def run_calibration(max_steps: int = 3000) -> Dict[str, float]:
     r3_inst = _get("R3", "inst_threshold")
     flat_thr["R3_threshold_c"] = r3_inst if r3_inst is not None else 2.0
     flat_thr["cusum_k_R3"] = _get("R3", "cusum_k") or 0.3
-    flat_thr["cusum_h_R3"] = _get("R3", "cusum_h") or 3.0
+    flat_thr["cusum_h_R3"] = min(_get("R3", "cusum_h") or 3.0, 10.0 * flat_thr["cusum_k_R3"])
 
     # Rv voltage residual
     rv_inst = _get("Rv", "inst_threshold")
     flat_thr["Rv_threshold_v"] = rv_inst if rv_inst is not None else 5.0
     flat_thr["cusum_k_Rv"] = _get("Rv", "cusum_k") or 0.5
-    flat_thr["cusum_h_Rv"] = _get("Rv", "cusum_h") or 5.0
+    # Cap cusum_h_Rv at 10 * k (justified by single-session CUSUM bound)
+    flat_thr["cusum_h_Rv"] = min(_get("Rv", "cusum_h") or 5.0, 10.0 * flat_thr["cusum_k_Rv"])
 
     # Rflow actuator echo
     rflow_inst = _get("Rflow", "inst_threshold")
     flat_thr["Rflow_threshold"] = rflow_inst if rflow_inst is not None else 3.0
 
-    # Rcur current echo
+    # Rcur current echo: tighter instant threshold + CUSUM
     rcur_inst = _get("Rcur", "inst_threshold")
-    flat_thr["Rcur_threshold"] = rcur_inst if rcur_inst is not None else 15.0
+    flat_thr["Rcur_threshold"] = min(rcur_inst if rcur_inst is not None else 10.0, 10.0)
+    flat_thr["cusum_k_Rcur"] = max(0.5, _get("Rcur", "cusum_k") or 0.5)
+    flat_thr["cusum_h_Rcur"] = min(_get("Rcur", "cusum_h") or 5.0, 10.0 * flat_thr["cusum_k_Rcur"])
 
     # Print the derived thresholds
     print("\nDerived Thresholds:")

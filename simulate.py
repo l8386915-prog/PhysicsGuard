@@ -37,6 +37,8 @@ def run_session(
     command_tamper: Optional[Callable[[float, Tuple[float, float]], Tuple[float, float]]] = None,
     plant_hook: Optional[Callable[[float, Plant], None]] = None,
     scenario: Optional[Any] = None,
+    guard: Optional[Any] = None,
+    gate: Optional[Any] = None,
     until_soc: float = 0.80,
     ambient_c: float = 25.0,
     inlet_c: float = 25.0,
@@ -64,6 +66,10 @@ def run_session(
         parameters dynamically over time.
     scenario : Scenario, optional
         Scenario descriptor specifying faults, cyberattacks, and metadata.
+    guard : PhysicsGuard, optional
+        Anomaly detector observer.
+    gate : SafetyGate, optional
+        Actuator protection gate (virtual sensor and command screening).
     until_soc : float, default 0.80
         Target State of Charge to terminate charging session.
     ambient_c : float, default 25.0 C
@@ -79,7 +85,7 @@ def run_session(
     -------
     pd.DataFrame
         DataFrame with measured signals, true signals, requested commands,
-        applied commands, and scenario metadata.
+        applied commands, gate telemetry, and scenario metadata.
     """
     if seed is not None:
         plant.sensor_rng = np.random.default_rng(seed)
@@ -110,6 +116,11 @@ def run_session(
     if hasattr(controller, "reset"):
         controller.reset()
 
+    # Attach guard to gate if not already set
+    if gate is not None and guard is not None:
+        if hasattr(gate, "set_guard") and getattr(gate, "guard", None) is None:
+            gate.set_guard(guard)
+
     records = []
     max_steps = int(max_duration_s / dt)
     step_count = 0
@@ -125,16 +136,30 @@ def run_session(
     while step_count < max_steps:
         t = plant.time_s
 
-        # 1. Controller determines commanded current and pump flow
-        req_current_a, req_pump_lpm = controller.compute_commands(meas)
+        # Stage 1: Virtual sensor filtering for controller (if gate enabled)
+        if gate is not None:
+            meas_for_ctrl = gate.sanitize(t, meas)
+        else:
+            meas_for_ctrl = meas
 
-        # 2. Command tamper intercepts actuation commands before physical plant
+        # 1. Controller determines commanded current and pump flow
+        req_current_a, req_pump_lpm = controller.compute_commands(meas_for_ctrl)
+
+        # 2. Command tamper intercepts actuation commands before actuator gate
         if command_tamper is not None:
-            appl_current_a, appl_pump_lpm = command_tamper(
+            tampered_current_a, tampered_pump_lpm = command_tamper(
                 t, (req_current_a, req_pump_lpm)
             )
         else:
-            appl_current_a, appl_pump_lpm = req_current_a, req_pump_lpm
+            tampered_current_a, tampered_pump_lpm = req_current_a, req_pump_lpm
+
+        # Stage 2: Actuator gate screening before delivery to plant
+        if gate is not None:
+            appl_current_a, appl_pump_lpm = gate.screen(
+                t, (tampered_current_a, tampered_pump_lpm), meas
+            )
+        else:
+            appl_current_a, appl_pump_lpm = tampered_current_a, tampered_pump_lpm
 
         # 3. Plant hook called every step before plant.step
         if plant_hook is not None:
@@ -200,6 +225,21 @@ def run_session(
             "pump_cmd_lpm": float(appl_pump_lpm),
         }
 
+        # Gate telemetry columns
+        if gate is not None:
+            row["gate_mode"] = str(getattr(gate, "mode", "NOMINAL"))
+            row["gate_action"] = str(getattr(gate, "last_action", "none"))
+            row["trusted_temp"] = float(getattr(gate, "last_trusted_temp", meas["temp_cell_a"]))
+            row["applied_vs_requested_current"] = float(appl_current_a - req_current_a)
+            row["intervened"] = bool(getattr(gate, "intervened", False))
+        else:
+            row["gate_mode"] = "NOMINAL"
+            row["gate_action"] = "none"
+            trusted_val = guard.trusted_temperature() if guard is not None and hasattr(guard, "trusted_temperature") else float(meas.get("temp_cell_a", 25.0))
+            row["trusted_temp"] = float(trusted_val)
+            row["applied_vs_requested_current"] = float(appl_current_a - req_current_a)
+            row["intervened"] = False
+
         # Scenario columns if scenario is provided
         if scenario is not None:
             row["scenario"] = scenario.name
@@ -209,6 +249,20 @@ def run_session(
                 row["event_active"] = bool(t_post >= scenario.start_s)
             else:
                 row["event_active"] = False
+
+        # Guard verdict logging if guard provided
+        if guard is not None:
+            verdict = guard.update(
+                t_post,
+                dict(meas),
+                (float(appl_current_a), float(appl_pump_lpm)),
+                requested_cmds=(float(tampered_current_a), float(tampered_pump_lpm))
+            )
+            row["diagnosis"] = verdict.diagnosis
+            row["alarm_level"] = verdict.alarm_level
+            row["is_attack"] = verdict.is_attack
+            row["blamed_signals"] = verdict.blamed_signals
+            row["reasons"] = verdict.reasons
 
         records.append(row)
         step_count += 1

@@ -149,9 +149,12 @@ class Twin:
         m_dot = self.rho_coolant * flow_m3_s
         c_dot = m_dot * self.cp_coolant
 
-        if c_dot < 1e-4 or self.pump_flow_lpm <= 0.0:
+        # If flow is below 1.0 L/min, coolant is stagnant: no heat removal,
+        # and the outlet temperature relaxes toward the pack temperature with
+        # a 90 s time constant (stagnant fluid warms up toward pack temperature).
+        if self.pump_flow_lpm < 1.0:
             self.q_cool = 0.0
-            self.T_cool_out = self.T_cool_in
+            self.T_cool_out += (self.T_batt - self.T_cool_out) / 90.0 * dt
         else:
             ntu = self.ua_cold_plate / c_dot
             effectiveness = 1.0 - np.exp(-ntu)

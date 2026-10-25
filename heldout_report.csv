@@ -1,0 +1,16 @@
+metric_type,name,detection_rate,median_latency_s,p95_latency_s,sample_count
+attack_detection,freeze_temp_a,1.0,12.0,12.0,5
+attack_detection,spike_temp_a,1.0,0.0,0.0,5
+attack_detection,drift_temp_a,1.0,29.0,34.2,5
+attack_detection,replay_temp_a,1.0,6.0,6.8,5
+attack_detection,dead_sensor_flatline_temp_a,1.0,12.0,12.0,5
+attack_detection,dead_sensor_nan_temp_a,1.0,0.0,0.0,5
+attack_detection,abusive_command,1.0,5.0,5.0,5
+attack_detection,pump_off,1.0,5.0,5.0,5
+attack_detection,coordinated,1.0,5.0,5.0,5
+attack_detection,drift_current,1.0,56.0,56.0,5
+attack_detection,drift_voltage,1.0,117.0,131.4,5
+attack_detection,demo_hot_attack,1.0,0.0,0.0,5
+aggregate,false_intervention_rate,0.1,0.0,0.0,30
+aggregate,fraction_peak_temp_below_45C,1.0,0.0,0.0,100
+aggregate,mean_charge_time_penalty,0.213,0.0,0.0,100

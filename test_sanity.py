@@ -402,3 +402,44 @@ def test_twin_vs_plant_tracking():
 
     print(f"\n[Twin Tracking Test] Max Temperature Error: {max_temp_error:.2f} C (Limit: 3.0 C)")
     assert max_temp_error < 3.0
+
+
+def test_stagnant_coolant_outlet_rises():
+    """
+    Test stagnant coolant model (fix 0):
+    With the pump forced off from t = 300 s, the measured coolant outlet
+    temperature at t = 600 s must be more than 3 C above the inlet temperature.
+
+    This validates that the outlet no longer snaps abruptly to the inlet
+    when flow stops, but instead warms slowly toward the pack temperature.
+    """
+    plant = Plant(perturb=False, initial_soc=0.20, initial_temp_c=25.0, sensor_seed=42)
+    ctrl = ChargerBMS()
+
+    # Run normally up to t = 300 s (pump on, current on)
+    for _ in range(300):
+        meas = plant.measure()
+        req_curr, req_pump = ctrl.compute_commands(meas)
+        plant.step(dt=1.0, current_cmd_a=req_curr, pump_cmd_lpm=req_pump,
+                   T_cool_in_c=25.0, T_amb_c=25.0)
+
+    t_in_at_300 = plant.T_cool_in
+
+    # Force pump off for another 300 s (t = 300 to 600 s), current still on
+    for _ in range(300):
+        plant.step(dt=1.0, current_cmd_a=128.0, pump_cmd_lpm=0.0,
+                   T_cool_in_c=25.0, T_amb_c=25.0)
+
+    meas_600 = plant.measure()
+    t_out_600 = meas_600["coolant_temp_out"]
+    t_in_600 = meas_600["coolant_temp_in"]
+    delta = t_out_600 - t_in_600
+
+    print(f"\n[Stagnant Coolant Test] Measured coolant_temp_in at t=600s : {t_in_600:.2f} C")
+    print(f"[Stagnant Coolant Test] Measured coolant_temp_out at t=600s: {t_out_600:.2f} C")
+    print(f"[Stagnant Coolant Test] Delta (out - in)                   : {delta:.2f} C (must be > 3.0 C)")
+
+    assert delta > 3.0, (
+        f"Measured stagnant coolant outlet ({t_out_600:.2f} C) is not more than 3 C above "
+        f"inlet ({t_in_600:.2f} C) after 300 s with pump off! Delta={delta:.2f} C"
+    )
