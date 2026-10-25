@@ -1,0 +1,17 @@
+[
+  "physicsguard/tests/test_sanity.py::test_cell_voltage_never_exceeds_max",
+  "physicsguard/tests/test_sanity.py::test_coolant_check",
+  "physicsguard/tests/test_sanity.py::test_energy_balance",
+  "physicsguard/tests/test_sanity.py::test_pump_off_heats_faster",
+  "physicsguard/tests/test_sanity.py::test_soc_increases_monotonically",
+  "physicsguard/tests/test_sanity.py::test_time_step_check",
+  "physicsguard/tests/test_sanity.py::test_twin_independence",
+  "physicsguard/tests/test_sanity.py::test_twin_vs_plant_tracking",
+  "physicsguard/tests/test_sanity.py::test_unprotected_cyberattack",
+  "physicsguard/tests/test_sanity.py::test_whole_run_energy_check",
+  "tests/test_sanity.py::test_cell_voltage_never_exceeds_max",
+  "tests/test_sanity.py::test_energy_balance",
+  "tests/test_sanity.py::test_pump_off_heats_faster",
+  "tests/test_sanity.py::test_soc_increases_monotonically",
+  "tests/test_sanity.py::test_twin_vs_plant_tracking"
+]
