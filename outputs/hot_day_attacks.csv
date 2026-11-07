@@ -1,0 +1,9 @@
+scenario,mode,peak_temp_c,seconds_above_45C,seconds_above_50C,charge_completed,final_soc,charge_time_s
+pump_off,unprotected,46.35,916,0,True,0.8,2443.0
+pump_off,protected,42.13,0,0,True,0.802,1784.0
+abusive_command,unprotected,49.83,458,0,True,0.802,1172.0
+abusive_command,protected,44.01,0,0,True,0.803,1602.0
+coordinated,unprotected,50.6,600,67,True,0.803,1602.0
+coordinated,protected,37.8,0,0,True,0.8,6921.0
+demo_hot_attack,unprotected,50.87,631,98,True,0.803,1602.0
+demo_hot_attack,protected,42.13,0,0,True,0.802,1784.0
