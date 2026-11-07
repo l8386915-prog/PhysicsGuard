@@ -1,5 +1,11 @@
 # PhysicsGuard: Closed-Loop Cyber-Physical Protection for EV DC Fast-Charging
 
+[![Streamlit App](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://physicsguard-ulayq6eaq893v7fqctte6e.streamlit.app/)
+[![Live Demo](https://img.shields.io/badge/Live%20Demo-Streamlit%20Cloud-FF4B4B?style=for-the-badge&logo=streamlit&logoColor=white)](https://physicsguard-ulayq6eaq893v7fqctte6e.streamlit.app/)
+[![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue.svg?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org/)
+
+> 🚀 **Live Interactive Attack Lab & Dashboard:** [https://physicsguard-ulayq6eaq893v7fqctte6e.streamlit.app/](https://physicsguard-ulayq6eaq893v7fqctte6e.streamlit.app/)
+
 **PhysicsGuard** is an end-to-end physics-based cybersecurity and actuator interlock system for Electric Vehicle (EV) DC Fast-Charging systems. 
 
 In Phases 1–4, PhysicsGuard developed a high-fidelity physical plant, an onboard 1-RC digital twin observer, and an anomaly detector (`PhysicsGuard`) evaluating 7 check families. In **Phase 5**, PhysicsGuard closes the control loop: when sensor or command tampering is detected, the **`SafetyGate`** cyber-physical interlock intervenes directly at the actuator boundary so the physical battery remains safely within its operating envelope ($\le 45.0^\circ\text{C}$, $\le 130.56\text{ A}$, $\ge 5\text{ L/min}$ pump flow) under all cyberattacks and component faults.
