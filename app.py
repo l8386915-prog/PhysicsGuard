@@ -1260,7 +1260,7 @@ with tab3:
 
     with res_sec1:
         st.markdown("#### Attack Detection Performance (200 Held-Out Sessions)")
-        st.caption("Wilson 95% Score Confidence Intervals across fresh seeds 700–899 with random parameter perturbations.")
+        st.caption("Wilson 95% Score Confidence Intervals across fresh seeds 900–1199 with random parameter perturbations.")
         
         heldout_f = ROOT_DIR / "outputs" / "heldout_report_v2.csv"
         if heldout_f.exists():

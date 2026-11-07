@@ -150,7 +150,7 @@ python evaluate_protected.py
 ```
 Outputs generated in `outputs/`:
 - `outputs/protected_vs_unprotected.csv`: Side-by-side metrics across all 17 scenarios.
-- `outputs/heldout_report_v2.csv`: Statistical performance on 200 fresh held-out sessions (seeds 700–899, `perturb=True`) with 95% Wilson confidence intervals.
+- `outputs/heldout_report_v2.csv`: Statistical performance on 300 fresh held-out sessions (seeds 900–1199, `perturb=True`) with 95% Wilson confidence intervals.
 - `outputs/compare_<scenario>.png`: Side-by-side plots for `demo_hot_attack`, `pump_off`, `coordinated`, `abusive_command`, `drift_temp_a`, and `pump_degradation`.
 
 ### Run Hot-Day Attacks Evaluation
@@ -200,7 +200,7 @@ The application opens in your browser at `http://localhost:8501`.
 
 ### Step 5: Walk Through Key Verification Tabs (90 seconds)
 1. Click **`📊 Physics Residual Matrix`**: Explain how different rows trigger different physical residuals ($R_{flow}$ for pump degradation, $R_{cur}$ for current drift, $R_v$ for voltage drift, $R_{1a}/R_3$ for temperature spoofing).
-2. Click **`📈 Evaluation Results & Held-Out Suite`**: Show statistical results on the 200 held-out sessions with Wilson 95% Confidence Intervals (`17 of 17 [0.816, 1.000]` on all attack vectors, $0.0\%$ false alarm rate, $100\%$ thermal safety).
+2. Click **`📈 Evaluation Results & Held-Out Suite`**: Show statistical results on the 300 held-out sessions (seeds 900–1199) with Wilson 95% Confidence Intervals (`17 of 17 [0.816, 1.000]` on all attack vectors, $0.0\%$ false alarm rate, $100\%$ thermal safety).
 3. Click **`📋 Limitations & Technical Assumptions`**: Point out the dynamic ratio calculation ($3.88\times$ penalty) and the complete parameter justification table.
 
 ---
